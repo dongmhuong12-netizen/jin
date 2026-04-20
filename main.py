@@ -8,6 +8,9 @@ TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise RuntimeError("Missing TOKEN")
 
+# 🔥 DEPLOY CHECK MARKER
+print("DEPLOY VERSION: 2026-04-20-ANTI_LOOP_FIX")
+
 def run_bot():
     bot = create_bot()
 

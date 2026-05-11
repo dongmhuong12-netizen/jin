@@ -11,7 +11,6 @@ MONGO_URI = os.getenv("MONGO_URI")
 
 class JinBot(commands.Bot):
     def __init__(self):
-        # Thiết lập Intents chuẩn cho hệ thống quản trị
         intents = discord.Intents.default()
         intents.message_content = True
         intents.members = True
@@ -21,20 +20,34 @@ class JinBot(commands.Bot):
             intents=intents, 
             help_command=None
         )
-        
-        # Khởi tạo kết nối MongoDB (Trí nhớ của bot)
-        self.db_client = None
-        self.db = None
 
     async def setup_hook(self):
-        """Hàm chạy trước khi bot login: Dùng để kết nối DB và nạp module"""
+        """Chạy trước khi login: Kết nối DB, nạp Cogs và Sync lệnh"""
+        # 1. Kết nối MongoDB
         print("🛠️ Đang khởi tạo kết nối MongoDB...")
         self.db_client = AsyncIOMotorClient(MONGO_URI)
-        self.db = self.db_client.jin_database # Tên database trên Atlas
+        self.db = self.db_client.Jin_Ultimate_Database # Tên DB khớp với constants
         print("✅ MongoDB Connected!")
+
+        # 2. Nạp Cogs tự động (Tìm trong thư mục cogs)
+        # Lưu ý: Cậu phải có thư mục tên 'cogs' và file 'status.py' trong đó
+        try:
+            await self.load_extension("cogs.status")
+            print("📦 Đã nạp module: status.py")
+        except Exception as e:
+            print(f"❌ Không thể nạp module: {e}")
 
     async def on_ready(self):
         print(f"🚀 {self.user.name} Đã Online (ID: {self.user.id})")
+        
+        # 3. ĐỒNG BỘ LỆNH SLASH (QUAN TRỌNG NHẤT)
+        try:
+            print("🔄 Đang đồng bộ Slash Commands...")
+            synced = await self.tree.sync()
+            print(f"✅ Đã đồng bộ {len(synced)} lệnh thành công!")
+        except Exception as e:
+            print(f"❌ Lỗi đồng bộ lệnh: {e}")
+        
         print(f"🌐 Đang chạy trên quy mô Multi-server")
 
 # --- WEB SERVER (Dành riêng cho Render) ---
@@ -46,16 +59,15 @@ async def start_web_server():
     app.add_routes([web.get("/", handle)])
     runner = web.AppRunner(app)
     await runner.setup()
-    # Render yêu cầu port 10000
     site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
-    print("📡 Web Server Keep-alive is Running on Port 10000")
+    print("📡 Web Server (Port 10000) - Ready!")
 
 # --- KHỞI CHẠY HỆ THỐNG ---
 async def main():
     bot = JinBot()
+    # Chạy Web Server trước, sau đó mới chạy Bot
     async with bot:
-        # Chạy song song Web Server và Discord Bot (Asyncio Task)
         await asyncio.gather(
             start_web_server(),
             bot.start(TOKEN)

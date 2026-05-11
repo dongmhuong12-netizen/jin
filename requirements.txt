@@ -1,4 +1,4 @@
-discord.py
-aiohttp
-motor
-dnspython
+discord.py==2.4.0
+aiohttp==3.10.1
+motor==3.4.0
+dnspython==2.6.1

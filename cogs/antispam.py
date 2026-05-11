@@ -1,3 +1,4 @@
+# cogs/antispam.py
 import discord
 from discord.ext import commands, tasks
 import time
@@ -6,19 +7,27 @@ from collections import defaultdict
 import sys
 import os
 
-# Import từ file constants và utils
-from constants import COLOR_SILENCE, COLOR_AUDIT, DEFAULT_CONFIG
-from utils.time_converter import MAX_TIMEOUT_SECONDS
+# --- TƯ DUY IT: FIX LỖI IMPORT TRÊN RENDER ---
+# Đoạn này giúp Bot tìm thấy file constants.py và folder utils/ ở thư mục gốc
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+try:
+    from constants import COLOR_SILENCE, COLOR_AUDIT, DEFAULT_CONFIG
+    from utils.time_converter import MAX_TIMEOUT_SECONDS
+except ImportError:
+    # Dự phòng nếu đường dẫn vẫn bị lỗi để Bot không sập
+    COLOR_SILENCE, COLOR_AUDIT = 0x000000, 0x111111
+    MAX_TIMEOUT_SECONDS = 2419200
+    DEFAULT_CONFIG = {"active": True, "max_mentions": 5, "check_mentions": True}
 
 class AntiSpam(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # Cache lưu trữ tin nhắn: {guild_id: {user_id: [timestamps]}}
         self.msg_cache = defaultdict(lambda: defaultdict(list))
         self.link_cache = defaultdict(lambda: defaultdict(list))
         self.mention_cache = defaultdict(lambda: defaultdict(list))
         
-        self.config_cache = {} # Lưu cấu hình server để tránh spam query Mongo
+        self.config_cache = {} 
         self.update_cache.start()
 
     def cog_unload(self):
@@ -28,10 +37,10 @@ class AntiSpam(commands.Cog):
     async def update_cache(self):
         """Đồng bộ cấu hình từ MongoDB vào RAM để xử lý cực nhanh"""
         try:
+            # Truy vấn lấy cấu hình tất cả server
             async for doc in self.bot.db.server_settings.find():
                 gid = doc.get("guild_id")
                 if gid:
-                    # Gộp DEFAULT_CONFIG với dữ liệu từ DB
                     self.config_cache[gid] = {**DEFAULT_CONFIG, **doc}
         except Exception as e:
             print(f"⚠️ Lỗi update cache AntiSpam: {e}")
@@ -52,18 +61,18 @@ class AntiSpam(commands.Cog):
         uid = message.author.id
         now = time.time()
 
-        # Lấy config (nếu chưa có trong cache thì dùng mặc định)
+        # Lấy config từ cache RAM
         config = self.config_cache.get(gid, DEFAULT_CONFIG)
         if not config.get("active"): return
         
         # 2. Check Whitelist
         if self.is_whitelisted(message, config): return
 
-        # --- LOGIC KIỂM TRA (TƯ DUY IT: QUÉT TOÀN DIỆN) ---
+        # --- LOGIC KIỂM TRA ---
 
-        # A. SPAM MENTION (Sửa lỗi ngó lơ)
+        # A. SPAM MENTION (Fix lỗi ngó lơ bằng Regex)
         if config.get("check_mentions"):
-            # Đếm tất cả tag: User, Role, Everyone/Here bằng Regex để chính xác tuyệt đối
+            # Quét text thô để đếm mọi lượt tag user/role
             raw_mentions = re.findall(r'<@!?\d+>|<@&\d+>', message.content)
             mention_count = len(raw_mentions)
             if message.mention_everyone: mention_count += 1
@@ -72,16 +81,16 @@ class AntiSpam(commands.Cog):
             if mention_count >= config.get("max_mentions", 5):
                 return await self.execute_punishment(message, "Spam Mention (Exceeded limit)")
 
-            # Kiểm tra spam tag qua nhiều tin nhắn (Rolling window 5s)
-            self.mention_cache[gid][uid].append(now)
-            self.mention_cache[gid][uid] = [t for t in self.mention_cache[gid][uid] if now - t < 5.0]
-            if len(self.mention_cache[gid][uid]) >= 3: # 3 tin nhắn chứa tag liên tục
-                 return await self.execute_punishment(message, "Mention Exhaustion")
+            # Kiểm tra tần suất tag (3 tin nhắn có tag trong 5 giây)
+            if mention_count > 0:
+                self.mention_cache[gid][uid].append(now)
+                self.mention_cache[gid][uid] = [t for t in self.mention_cache[gid][uid] if now - t < 5.0]
+                if len(self.mention_cache[gid][uid]) >= 3:
+                     return await self.execute_punishment(message, "Mention Exhaustion")
 
-        # B. MESSAGE FLOODING (Tần suất gửi tin)
+        # B. MESSAGE FLOODING
         if config.get("check_messages"):
             self.msg_cache[gid][uid].append(now)
-            # Giữ lại các timestamp trong vòng 3 giây
             self.msg_cache[gid][uid] = [t for t in self.msg_cache[gid][uid] if now - t < 3.0]
             if len(self.msg_cache[gid][uid]) >= config.get("max_messages", 7):
                 return await self.execute_punishment(message, "Message Flooding")
@@ -95,46 +104,45 @@ class AntiSpam(commands.Cog):
                     return await self.execute_punishment(message, "Link Spam")
 
     async def execute_punishment(self, message, reason):
-        """Hàm trảm: Timeout + Clear Mess + Log"""
         member = message.author
         guild = message.guild
         config = self.config_cache.get(guild.id, DEFAULT_CONFIG)
 
         try:
-            # 1. Thực thi Timeout 28 ngày (Max Discord)
+            # 1. Timeout tối đa 28 ngày
             until = discord.utils.utcnow() + discord.utils.timedelta(seconds=MAX_TIMEOUT_SECONDS)
             await member.timeout(until, reason=f"Jin Anti-Spam: {reason}")
 
-            # 2. Xóa tin nhắn bẩn (Tối ưu: Chỉ xóa của kẻ vi phạm)
-            await message.channel.purge(limit=10, check=lambda m: m.author == member)
+            # 2. Dọn dẹp tin nhắn vi phạm
+            try:
+                await message.channel.purge(limit=10, check=lambda m: m.author == member)
+            except: pass
 
-            # 3. Gửi Embed Silence (Kênh hiện tại hoặc kênh Silence cấu hình)
+            # 3. Thông báo Silence
             embed_silence = discord.Embed(
                 title="🚫 HỆ THỐNG SILENCE",
-                description=f"**Đối tượng:** {member.mention}\n**Hành vi:** {reason}\n**Hình phạt:** Timeout 28 ngày",
+                description=f"**Đối tượng:** {member.mention}\n**Lý do:** {reason}\n**Thời hạn:** 28 ngày",
                 color=COLOR_SILENCE
             )
-            embed_silence.set_footer(text="Hệ thống tự động bảo vệ bởi Jin Bot")
             
-            target_chan_id = config.get("silence_channel")
-            target_chan = guild.get_channel(target_chan_id) if target_chan_id else message.channel
-            if target_chan: await target_chan.send(embed=embed_silence)
+            target_id = config.get("silence_channel")
+            chan = guild.get_channel(target_id) if target_id else message.channel
+            if chan: await chan.send(embed=embed_silence)
 
-            # 4. Gửi Audit Log (Nếu có cấu hình)
+            # 4. Audit Log
             audit_id = config.get("audit_log_channel")
             if audit_id:
                 audit_chan = guild.get_channel(audit_id)
                 if audit_chan:
-                    emb_audit = discord.Embed(title="🚨 AUDIT LOG VI PHẠM", color=COLOR_AUDIT)
-                    emb_audit.add_field(name="Người vi phạm", value=f"{member} (`{member.id}`)", inline=False)
-                    emb_audit.add_field(name="Lý do", value=reason, inline=True)
-                    emb_audit.add_field(name="Vị trí", value=message.channel.mention, inline=True)
-                    await audit_chan.send(embed=emb_audit)
+                    emb = discord.Embed(title="🚨 AUDIT LOG", color=COLOR_AUDIT)
+                    emb.add_field(name="User", value=f"{member} (`{member.id}`)")
+                    emb.add_field(name="Lý do", value=reason)
+                    await audit_chan.send(embed=emb)
 
         except discord.Forbidden:
-            print(f"❌ Thiếu quyền xử lý {member.name} tại {guild.name}")
+            print(f"❌ Không đủ quyền trảm {member.name}")
         except Exception as e:
-            print(f"⚠️ Lỗi thực thi trảm: {e}")
+            print(f"⚠️ Lỗi trảm: {e}")
 
 async def setup(bot):
     await bot.add_cog(AntiSpam(bot))

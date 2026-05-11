@@ -1,3 +1,4 @@
+# main.py
 import os
 import asyncio
 import discord
@@ -17,53 +18,46 @@ class JinBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self):
-        # Kết nối MongoDB
+        # 1. Kết nối MongoDB
         self.db_client = AsyncIOMotorClient(MONGO_URI)
         self.db = self.db_client.Jin_Ultimate_Database
         
-        # Nạp Cogs
-        extensions = ['cogs.status', 'cogs.warn_setup']
-        for ext in extensions:
+        # 2. Nạp các module hệ thống (Phase 1)
+        exts = ['cogs.status', 'cogs.antispam', 'cogs.antispam_config']
+        for ext in exts:
             try:
                 await self.load_extension(ext)
-                print(f"✅ Loaded {ext}")
+                print(f"✅ Đã nạp: {ext}")
             except Exception as e:
-                print(f"❌ Failed to load {ext}: {e}")
+                print(f"❌ Lỗi nạp {ext}: {e}")
 
     async def on_ready(self):
-        print(f"🚀 {self.user.name} is Online")
+        print(f"🚀 {self.user.name} đã sẵn sàng trừng phạt.")
         await self.tree.sync()
-        # Bắt đầu vòng lặp quét ngầm
+        # Chạy task quét rác 5p/lần
         if not self.decay_cleaner.is_running():
             self.decay_cleaner.start()
 
     @tasks.loop(minutes=5.0)
     async def decay_cleaner(self):
-        """Hệ thống tự động dọn dẹp án phạt hết hạn (5 phút/lần)"""
-        current_time = int(time.time())
+        """Hệ thống tự động dọn dẹp Database (Tư duy IT tối ưu tài nguyên)"""
+        now = int(time.time())
         try:
-            # Xóa tất cả record có reset_at nhỏ hơn thời gian hiện tại
-            result = await self.db.discipline_records.delete_many({
-                "reset_at": {"$lt": current_time, "$ne": 0}
-            })
-            if result.deleted_count > 0:
-                print(f"🧹 Cleaned up {result.deleted_count} expired warn records.")
-        except Exception as e:
-            print(f"⚠️ Decay Cleaner Error: {e}")
+            res = await self.db.discipline_records.delete_many({"reset_at": {"$lt": now, "$ne": 0}})
+            if res.deleted_count > 0: print(f"🧹 Đã xóa {res.deleted_count} án phạt hết hạn.")
+        except Exception as e: print(f"⚠️ Lỗi Cleaner: {e}")
 
-# --- WEB SERVER & STARTUP ---
-async def handle(request): return web.Response(text="Jin is Live!")
+# --- WEB SERVER KEEPALIVE CHO RENDER ---
+async def handle(r): return web.Response(text="Jin Anti-Spam is Live!")
 
 async def main():
     bot = JinBot()
-    app = web.Application()
-    app.add_routes([web.get("/", handle)])
-    runner = web.AppRunner(app)
-    await runner.setup()
+    app = web.Application(); app.add_routes([web.get("/", handle)])
+    runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", 10000).start()
-    
-    async with bot:
-        await bot.start(TOKEN)
+    async with bot: await bot.start(TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+

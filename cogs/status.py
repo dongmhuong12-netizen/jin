@@ -5,9 +5,14 @@ import time
 import os
 import sys
 
-# Logic IT: Dẫn đường cho Python tìm thấy file constants.py ở thư mục gốc
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__fill__), '..')))
-from constants import COLOR_GENERAL
+# Sửa lỗi dẫn đường: __file__ (2 dấu gạch dưới mỗi bên)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+try:
+    from constants import COLOR_GENERAL
+except ImportError:
+    # Fallback nếu vẫn không tìm thấy constants để không làm sập bot
+    COLOR_GENERAL = 0x010101
 
 class Status(commands.Cog):
     def __init__(self, bot):

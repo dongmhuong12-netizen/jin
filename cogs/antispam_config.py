@@ -2,14 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sys, os
-
-# Fix path Render
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-try:
-    from constants import COLOR_GENERAL, DEFAULT_CONFIG
-except ImportError:
-    COLOR_GENERAL, DEFAULT_CONFIG = 0x010101, {"active": True}
+from constants import COLOR_GENERAL, DEFAULT_CONFIG
 
 class AntiSpamConfig(commands.GroupCog, name="antispam"):
     def __init__(self, bot):
@@ -33,14 +26,16 @@ class AntiSpamConfig(commands.GroupCog, name="antispam"):
         def stat(k): return "✅" if cfg.get(k) else "❌"
         
         emb.add_field(name="📡 Trạng thái", value=f"Hệ thống: {stat('active')}\nTag: {stat('check_mentions')}\nFlood: {stat('check_messages')}\nLink: {stat('check_links')}")
-        emb.add_field(name="⚙️ Ngưỡng", value=f"Tag: `{cfg.get('max_mentions', 5)}` | Mess: `{cfg.get('max_messages', 7)}` | Link: `{cfg.get('max_links', 3)}`", inline=False)
+        emb.add_field(name="⚙️ Ngưỡng chặn", value=f"Tag: `{cfg.get('max_mentions', 5)}` | Mess: `{cfg.get('max_messages', 7)}` | Link: `{cfg.get('max_links', 3)}`", inline=False)
         
         silence = f"<#{cfg.get('silence_channel')}>" if cfg.get('silence_channel') else "`Chưa set`"
         audit = f"<#{cfg.get('audit_log_channel')}>" if cfg.get('audit_log_channel') else "`Chưa set`"
-        emb.add_field(name="📺 Kênh", value=f"Silence: {silence} | Audit: {audit}", inline=False)
+        emb.add_field(name="📺 Kênh Log", value=f"Silence: {silence} | Audit: {audit}", inline=False)
         
-        punished = [m.mention for m in interaction.guild.members if m.timed_out_until]
-        emb.add_field(name="🔨 Đang bị vả", value=", ".join(punished[:10]) if punished else "Sạch sẽ", inline=False)
+        # Đã thay thế vòng lặp O(N) quét members bằng thông số thời gian phạt, bảo vệ Event Loop
+        duration = cfg.get("punishment_duration", "10m")
+        emb.add_field(name="⏱️ Hình phạt (Fallback)", value=f"Thời gian Timeout: `{duration}`", inline=False)
+        
         await interaction.followup.send(embed=emb)
 
     @app_commands.command(name="toggle", description="Bật/Tắt module bảo vệ")
@@ -60,16 +55,18 @@ class AntiSpamConfig(commands.GroupCog, name="antispam"):
 
     @app_commands.command(name="limits", description="Thiết lập ngưỡng trừng phạt")
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def set_limits(self, interaction: discord.Interaction, max_mentions: int = None, max_messages: int = None, max_links: int = None):
+    async def set_limits(self, interaction: discord.Interaction, max_mentions: int = None, max_messages: int = None, max_links: int = None, duration: str = None):
         await interaction.response.defer(ephemeral=True)
         up = {}
         if max_mentions: up["max_mentions"] = max_mentions
         if max_messages: up["max_messages"] = max_messages
         if max_links: up["max_links"] = max_links
+        if duration: up["punishment_duration"] = duration # Khớp với logic moderator.py
+        
         if not up: return await interaction.followup.send("⚠️ Cần nhập ít nhất 1 thông số.")
         await self.bot.db.server_settings.update_one({"guild_id": interaction.guild.id}, {"$set": up}, upsert=True)
         await self._update_system_cache(interaction.guild.id)
-        await interaction.followup.send("⚙️ Đã cập nhật ngưỡng trừng phạt.")
+        await interaction.followup.send("⚙️ Đã cập nhật cấu hình ngưỡng và thời gian trừng phạt.")
 
     @app_commands.command(name="setup-channels", description="Gán kênh Silence và Audit Log")
     @app_commands.checks.has_permissions(manage_guild=True)
@@ -95,24 +92,14 @@ class Whitelist(commands.GroupCog, name="whitelist"):
         if user: q["whitelist_users"] = user.id
         if role: q["whitelist_roles"] = role.id
         await self.bot.db.server_settings.update_one({"guild_id": interaction.guild.id}, {"$addToSet": q}, upsert=True)
-        await self.bot.get_cog("AntiSpamConfig")._update_system_cache(interaction.guild.id)
+        
+        # Đã sửa tên Cog chuẩn để đồng bộ RAM thành công
+        config_cog = self.bot.get_cog("antispam")
+        if config_cog: await config_cog._update_system_cache(interaction.guild.id)
+            
         await interaction.followup.send("✅ Đã thêm vào Whitelist.")
 
-    # --- AUTOCOMPLETE: CHỈ HIỆN ID THỰC TẾ TRONG DB ---
-    async def user_auto(self, it: discord.Interaction, curr: str):
-        doc = await self.bot.db.server_settings.find_one({"guild_id": it.guild.id}) or {}
-        ids = doc.get("whitelist_users", [])
-        return [app_commands.Choice(name=it.guild.get_member(uid).display_name if it.guild.get_member(uid) else f"ID: {uid}", value=str(uid)) 
-                for uid in ids if curr in str(uid)][:25]
-
-    async def role_auto(self, it: discord.Interaction, curr: str):
-        doc = await self.bot.db.server_settings.find_one({"guild_id": it.guild.id}) or {}
-        ids = doc.get("whitelist_roles", [])
-        return [app_commands.Choice(name=it.guild.get_role(rid).name if it.guild.get_role(rid) else f"ID: {rid}", value=str(rid)) 
-                for rid in ids if curr in str(rid)][:25]
-
     @app_commands.command(name="remove", description="Xóa ngoại lệ (Chỉ đề xuất đồ có sẵn)")
-    @app_commands.autocomplete(user_id=user_auto, role_id=role_auto)
     @app_commands.checks.has_permissions(manage_guild=True)
     async def remove(self, it: discord.Interaction, user_id: str = None, role_id: str = None):
         await it.response.defer(ephemeral=True)
@@ -122,8 +109,28 @@ class Whitelist(commands.GroupCog, name="whitelist"):
         if role_id: pull["whitelist_roles"] = int(role_id)
         res = await self.bot.db.server_settings.update_one({"guild_id": it.guild.id}, {"$pull": pull})
         if res.modified_count == 0: return await it.followup.send("❌ Không tìm thấy trong Whitelist.")
-        await self.bot.get_cog("AntiSpamConfig")._update_system_cache(it.guild.id)
+        
+        # Đã sửa tên Cog chuẩn
+        config_cog = self.bot.get_cog("antispam")
+        if config_cog: await config_cog._update_system_cache(it.guild.id)
+            
         await it.followup.send("🗑️ Đã xóa khỏi danh sách.")
 
+    # --- SỬA CÚ PHÁP AUTOCOMPLETE CHUẨN DISCORD.PY V2 ---
+    @remove.autocomplete('user_id')
+    async def user_auto(self, it: discord.Interaction, curr: str):
+        doc = await self.bot.db.server_settings.find_one({"guild_id": it.guild.id}) or {}
+        ids = doc.get("whitelist_users", [])
+        return [app_commands.Choice(name=it.guild.get_member(uid).display_name if it.guild.get_member(uid) else f"ID: {uid}", value=str(uid)) 
+                for uid in ids if curr in str(uid)][:25]
+
+    @remove.autocomplete('role_id')
+    async def role_auto(self, it: discord.Interaction, curr: str):
+        doc = await self.bot.db.server_settings.find_one({"guild_id": it.guild.id}) or {}
+        ids = doc.get("whitelist_roles", [])
+        return [app_commands.Choice(name=it.guild.get_role(rid).name if it.guild.get_role(rid) else f"ID: {rid}", value=str(rid)) 
+                for rid in ids if curr in str(rid)][:25]
+
 async def setup(bot):
-    await bot.add_cog(AntiSpamConfig(bot)); await bot.add_cog(Whitelist(bot))
+    await bot.add_cog(AntiSpamConfig(bot))
+    await bot.add_cog(Whitelist(bot))

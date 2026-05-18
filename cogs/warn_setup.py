@@ -1,3 +1,4 @@
+# cogs/warn_setup.py
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -47,13 +48,13 @@ class WarnLevelModal(discord.ui.Modal):
         self.add_item(self.message)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 1. Kiểm tra Mode nhập vào (IT Mindset - Option A: Báo lỗi ngay)
+        # 1. Kiểm tra Mode nhập vào
         valid_modes = ["mute", "kick", "ban", "none"]
         mode_val = self.mode.value.lower().strip()
         if mode_val not in valid_modes:
             return await interaction.response.send_message(f"❌ Sai Mode phạt! Chỉ được nhập: {', '.join(valid_modes)}", ephemeral=True)
 
-        # 2. Convert thời gian
+        # 2. Convert thời gian an toàn
         punish_sec = parse_duration(self.duration.value)
         reset_sec = parse_duration(self.reset.value)
         
@@ -70,6 +71,11 @@ class WarnLevelModal(discord.ui.Modal):
             upsert=True
         )
 
+        # 4. TƯ DUY MULTI-IT: Đồng bộ RAM nóng ngay lập tức để hệ thống nhận diện luật mới
+        config_cog = self.bot.get_cog("antispam")
+        if config_cog:
+            await config_cog._update_system_cache(interaction.guild.id)
+
         await interaction.response.send_message(f"✅ Level {self.level_num} updated! Reset time: {format_seconds(reset_sec)}", ephemeral=True)
 
 class WarnSetupView(discord.ui.View):
@@ -79,7 +85,13 @@ class WarnSetupView(discord.ui.View):
 
         # Tạo Dropdown chọn từ 1 đến 20
         options = [discord.SelectOption(label=f"Level {i}", value=str(i)) for i in range(1, 21)]
-        self.select = discord.ui.Select(placeholder="Choose a Warn Level to configure...", options=options)
+        
+        # Bổ sung custom_id để Discord ghi nhớ View này vĩnh viễn xuyên suốt các lần restart bot
+        self.select = discord.ui.Select(
+            custom_id="jin_warn_setup_dropdown",
+            placeholder="Choose a Warn Level to configure...", 
+            options=options
+        )
         self.select.callback = self.select_callback
         self.add_item(self.select)
 

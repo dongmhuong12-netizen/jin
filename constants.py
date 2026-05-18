@@ -13,7 +13,7 @@ DEFAULT_CONFIG = {
     "max_mentions": 5,
     "max_messages": 7,
     "max_links": 3,
-    "punishment_duration": "10m", # Thời gian chịu phạt dự phòng nếu Admin chưa thiết lập
+    "punishment_duration": "28d", # Thời gian chịu phạt dự phòng nếu Admin chưa thiết lập
     "silence_channel": None,      # Fallback trống cho kênh thông báo cộng đồng
     "audit_log_channel": None,    # Fallback trống cho kênh lưu log Admin
     "whitelist_users": [],        # Chống lỗi KeyError khi module Whitelist quét RAM
